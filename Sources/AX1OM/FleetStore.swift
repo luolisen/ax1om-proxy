@@ -157,6 +157,19 @@ struct RatePoint: Identifiable { let id = UUID(); let time: Date; let upload: Do
         }
         return succeeded
     }
+    func importPrivateLine(slot: String, type: String, value: String) async -> Bool {
+        guard !isManagingCore, ["azure", "la-a", "panda"].contains(slot), ["file", "link"].contains(type) else { return false }
+        var succeeded = false
+        await manageCore {
+            self.coreStatus = try await self.core.prepare()
+            guard self.coreStatus?.running == false else {
+                throw CoreControlError.message("请先停止 AX1OM 内核，再导入或替换专线。")
+            }
+            _ = try await self.backend.providerAction("private-add", type: type, url: type == "link" ? value : nil, path: type == "file" ? value : nil, slot: slot, routes: self.routes, supplemental: self.supplementalRoutes)
+            self.coreMessage = "专线已导入，启动内核后生效。"; succeeded = true
+        }
+        return succeeded
+    }
     private func manageCore(_ operation: () async throws -> Void) async {
         guard !isManagingCore else { return }; isManagingCore = true
         defer { isManagingCore = false }

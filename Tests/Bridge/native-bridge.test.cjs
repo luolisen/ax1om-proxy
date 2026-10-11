@@ -49,6 +49,12 @@ test('private package caps preserve decimal GB and unknown Azure quota', () => {
   assert.equal(bridge.privateTrafficCap('azure'), null);
   assert.equal(bridge.privateTrafficCap('unknown'), null);
 });
+test('own imported nodes never inherit a quota from their routing slot', () => {
+  const runtime={proxies:[{name:'AX1OM Los Angeles A',type:'vless',server:'192.0.2.1'}]};
+  assert.equal(bridge.ownedRuntimeNodes(runtime,{},false)[0].trafficCapBytes,null);
+  assert.equal(bridge.ownedRuntimeNodes(runtime,{},false,{'la-a':50_000_000_000})[0].trafficCapBytes,50_000_000_000);
+  assert.equal(bridge.privateTrafficCap('panda',{panda:-1}),null);
+});
 test('runtime groups preserve exact membership, selected node and cached health', () => {
   const proxies = {
     'AI-Anthropic': { type: 'Selector', now: 'LA A', all: ['LA A', 'Panda', 'missing'] },
@@ -156,7 +162,7 @@ test('CLI invalid close input is a safe JSON result with no snapshot or network 
 });
 test('standalone private node IDs and traffic caps survive migration without live controller',()=>{
  const runtime={proxies:[{name:'AX1OM Azure West US',type:'vless',server:'192.0.2.1'},{name:'AX1OM Los Angeles A',type:'vless',server:'192.0.2.2'},{name:'AX1OM Panda Backup',type:'vless',server:'192.0.2.3'},{name:'Custom',type:'ss',server:'192.0.2.4'}]};
- const nodes=bridge.ownedRuntimeNodes(runtime,{},false);assert.deepEqual(nodes.slice(0,3).map(n=>n.id),['azure','la-a','panda']);assert.ok(nodes.slice(0,3).every(n=>n.source==='自建专线'));assert.equal(nodes[0].trafficCapBytes,null);assert.equal(nodes[1].trafficCapBytes,1000000000000);assert.equal(nodes[2].trafficCapBytes,200000000000);assert.equal(nodes[3].source,'AX1OM');assert.ok(nodes.every(n=>n.state==='配置已读取'));
+ const nodes=bridge.ownedRuntimeNodes(runtime,{},false,{'la-a':1000000000000,panda:200000000000});assert.deepEqual(nodes.slice(0,3).map(n=>n.id),['azure','la-a','panda']);assert.ok(nodes.slice(0,3).every(n=>n.source==='自建专线'));assert.equal(nodes[0].trafficCapBytes,null);assert.equal(nodes[1].trafficCapBytes,1000000000000);assert.equal(nodes[2].trafficCapBytes,200000000000);assert.equal(nodes[3].source,'AX1OM');assert.ok(nodes.every(n=>n.state==='配置已读取'));
 });
 test('standalone TUN status is actual controller evidence, never configured intent',()=>{
  const runtime={tun:{enable:true}};

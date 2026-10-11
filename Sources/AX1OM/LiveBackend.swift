@@ -44,8 +44,10 @@ struct LiveBackend {
 
     func run(resource: String, arguments: [String] = [], input: Data?, timeout: TimeInterval) async throws -> Data {
         let packagedURL = Bundle.main.resourceURL?.appendingPathComponent("AX1OM_AX1OM.bundle/Resources/" + resource)
-        let resourceURL = packagedURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-            ?? Bundle.module.url(forResource: resource, withExtension: nil, subdirectory: "Resources")
+        var resourceURL = packagedURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        #if DEBUG
+        resourceURL = resourceURL ?? Bundle.module.url(forResource: resource, withExtension: nil, subdirectory: "Resources")
+        #endif
         guard let resourceURL else {
             throw AdapterError.message("缺少本机适配器资源。")
         }

@@ -153,7 +153,10 @@ function cachedDelay(proxy) {
 function runtimeState(proxy) { const delay = cachedDelay(proxy); return proxy?.alive === false ? '缓存记录不可达' : delay != null ? '已有延迟记录' : '未实测'; }
 // Provider caps and VPS package caps are metadata, not live consumption.
 // VPS GB values use decimal units as listed in the user's package description.
-function privateTrafficCap(id) { return ({ panda: 200_000_000_000, 'la-a': 1_000_000_000_000 })[id] ?? null; }
+function privateTrafficCap(id, caps) {
+  if(caps !== undefined) { const value=caps?.[id]; return typeof value==='number'&&Number.isFinite(value)&&value>0?value:null; }
+  return ({ panda: 200_000_000_000, 'la-a': 1_000_000_000_000 })[id] ?? null;
+}
 function profileQuota(item = {}) {
   const extra = item.extra || {};
   const numeric = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -186,11 +189,11 @@ function groupSummaries(proxyData = {}, configuredNames = []) {
   return groups.map(({ order, ...group }) => group);
 }
 
-function ownedRuntimeNodes(runtime, proxyData, running) {
+function ownedRuntimeNodes(runtime, proxyData, running, privateCaps = {}) {
   const ids = {'AX1OM Azure West US':'azure','AX1OM Los Angeles A':'la-a','AX1OM Panda Backup':'panda'};
   return (runtime.proxies || []).map(p => {
     const id=ids[p.name], live=running?proxyData.proxies?.[p.name]:null;
-    return {id:id || stableIdentifier('standalone',p.name),name:p.name || '未命名节点',source:id?'自建专线':'AX1OM',kind:p.type==='vless'?'VLESS / REALITY':p.type || '未知协议',state:live?runtimeState(live):'配置已读取',address:p.server || null,delayMs:cachedDelay(live),trafficCapBytes:id?privateTrafficCap(id):null,detail:running?'来自独立核心配置与实时控制接口。':'本机独立配置；核心尚未运行。'};
+    return {id:id || stableIdentifier('standalone',p.name),name:p.name || '未命名节点',source:id?'自建专线':'AX1OM',kind:p.type==='vless'?'VLESS / REALITY':p.type || '未知协议',state:live?runtimeState(live):'配置已读取',address:p.server || null,delayMs:cachedDelay(live),trafficCapBytes:id?privateTrafficCap(id,privateCaps):null,detail:running?'来自独立核心配置与实时控制接口。':'本机独立配置；核心尚未运行。'};
   });
 }
 function observedTUN(configs,runtime,running,own) {
@@ -274,7 +277,7 @@ async function fetchSnapshot() {
   ];
   try { const preferences = readJSON(path.join(home, 'Library/Application Support/Google/Chrome/Default/Preferences')); const languages = preferences.intl?.accept_languages || preferences.intl?.selected_languages; if (languages) privacy.push({ id: 'language', title: 'Chrome 语言配置', state: String(languages).split(',')[0].startsWith('en') ? '英文优先配置' : '待调整', detail: sanitize(String(languages)) + '；仅 Default 配置缓存，未验证当前窗口的实际语言。' }); } catch {}
   if (own) {
-    nodes.push(...ownedRuntimeNodes(runtime,proxyData,values[0].status==='fulfilled'));
+    nodes.push(...ownedRuntimeNodes(runtime,proxyData,values[0].status==='fulfilled',sourceMeta.privateCaps || {}));
     for (const [providerName,provider] of Object.entries(providerData.providers || {})) for (const p of provider.proxies || []) nodes.push({id:stableIdentifier('provider-node',providerName+'\u0000'+p.name),name:p.name || '未命名节点',source:providerName,kind:p.type || '未知协议',state:runtimeState(p),address:null,delayMs:cachedDelay(p),detail:'来自独立核心 Provider。'});
   }
   const connectionSource = own ? 'ax1om' : relay.operationMode === 2 ? 'core' : 'mihomo';

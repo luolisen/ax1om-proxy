@@ -3,6 +3,7 @@ import SwiftUI
 struct AirportsView: View {
     @EnvironmentObject private var store: FleetStore
     @State private var showingAdd = false
+    @State private var showingPrivateImport = false
     private var privateNodes: [NodeSummary] {
         let order = ["azure", "la-a", "panda"]
         return store.snapshot.nodes.filter(isPrivate).sorted { (order.firstIndex(of: $0.id) ?? 99) < (order.firstIndex(of: $1.id) ?? 99) }
@@ -17,9 +18,13 @@ struct AirportsView: View {
                     Button { Task { await store.refresh() } } label: { Label("刷新状态", systemImage: "arrow.clockwise") }.disabled(store.isRefreshing).padding(.top, 5)
                 }
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("自建专线").font(.title3.weight(.semibold))
+                    HStack {
+                        Text("自建专线").font(.title3.weight(.semibold))
+                        Spacer()
+                        Button { showingPrivateImport = true } label: { Label("导入专线", systemImage: "square.and.arrow.down") }
+                    }
                     if privateNodes.isEmpty {
-                        emptyState("尚未读取到专线配置", detail: "等待读取", symbol: "server.rack")
+                        emptyState("添加你的专线", detail: "导入 VLESS 链接或本地配置文件", symbol: "server.rack")
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 14)], spacing: 14) {
                             ForEach(privateNodes) { node in privateCard(node) }
@@ -43,6 +48,7 @@ struct AirportsView: View {
                 }
             }.padding(28)
         }.sheet(isPresented: $showingAdd) { AddSubscriptionView().environmentObject(store) }
+            .sheet(isPresented: $showingPrivateImport) { ImportPrivateLineView().environmentObject(store) }
     }
     private func privateCard(_ node: NodeSummary) -> some View {
         FleetCard {

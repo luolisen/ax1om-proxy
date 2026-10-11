@@ -110,6 +110,75 @@ async function addSource(input) {
  }else throw Error('SOURCE_TYPE_INVALID');
  const id=addCached(s,{name:input.name,type:input.type,url:input.url,identity:`file:${input.path}`,nodes,quota});saveStore(s);return {...redact(s),sourceId:id};
 }
+function strictPrivateNode(node) {
+ if(!node || node.type!=='vless' || node.network!=='tcp' || node.tls!==true || node.flow!=='xtls-rprx-vision')throw Error('PRIVATE_PROTOCOL_INVALID');
+ if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(node.uuid||''))throw Error('PRIVATE_UUID_INVALID');
+ const reality=node['reality-opts'];if(!reality || !/^[A-Za-z0-9_-]{43}$/.test(reality['public-key']||''))throw Error('PRIVATE_KEY_INVALID');
+ const sid=reality['short-id'];if(typeof sid!=='string'||!/^[0-9a-f]{0,16}$/i.test(sid)||sid.length%2)throw Error('PRIVATE_SHORT_ID_INVALID');
+ if(typeof node.servername!=='string'||node.servername.length>253||!/^[a-z0-9.-]+$/i.test(node.servername))throw Error('PRIVATE_SNI_INVALID');
+ if(typeof node['client-fingerprint']!=='string'||!/^[a-z0-9_-]{1,40}$/i.test(node['client-fingerprint']))throw Error('PRIVATE_FINGERPRINT_INVALID');
+ return safeNodes([node])[0];
+}
+function parsePrivateLink(slot,raw) {
+ if(typeof raw!=='string'||raw.length>8192)throw Error('PRIVATE_LINK_INVALID');const url=new URL(raw.trim());
+ if(url.protocol!=='vless:'||url.password||!url.hostname||!url.port||url.pathname&&url.pathname!=='/')throw Error('PRIVATE_LINK_INVALID');
+ const allowed=new Set(['security','flow','type','sni','pbk','sid','fp','encryption','headerType','alpn']);
+ for(const key of url.searchParams.keys())if(!allowed.has(key)||url.searchParams.getAll(key).length!==1)throw Error('PRIVATE_LINK_INVALID');
+ const q=key=>url.searchParams.get(key);
+ if(q('security')!=='reality'||q('type')!=='tcp'||q('flow')!=='xtls-rprx-vision'||q('encryption')&&q('encryption')!=='none'||q('headerType')&&q('headerType')!=='none'||q('alpn')||!url.searchParams.has('sid'))throw Error('PRIVATE_LINK_PROTOCOL_INVALID');
+ const node={name:NAMES[slot],type:'vless',server:url.hostname.replace(/^\[|\]$/g,''),port:Number(url.port),uuid:decodeURIComponent(url.username),network:'tcp',tls:true,flow:q('flow'),servername:q('sni'),'client-fingerprint':q('fp')||'chrome','reality-opts':{'public-key':q('pbk'),'short-id':q('sid')??''},udp:true};
+ return strictPrivateNode(node);
+}
+function parsePrivateFile(slot,file) {
+ if(typeof file!=='string'||!path.isAbsolute(file))throw Error('PRIVATE_PATH_INVALID');
+ const stat=fs.statSync(file);if(!stat.isFile()||stat.size>4*1024*1024)throw Error('PRIVATE_FILE_INVALID');
+ const value=YAML.parse(fs.readFileSync(file,'utf8'));
+ let selected;
+ if(Array.isArray(value?.proxies)){const vless=value.proxies.filter(n=>n?.type==='vless');if(vless.length!==1)throw Error('PRIVATE_NODE_AMBIGUOUS');selected={...vless[0],network:vless[0].network||'tcp','client-fingerprint':vless[0]['client-fingerprint']||'chrome'};}
+ else if(Array.isArray(value?.outbounds)){
+  const vless=value.outbounds.filter(n=>n?.type==='vless');if(vless.length!==1)throw Error('PRIVATE_NODE_AMBIGUOUS');const v=vless[0];
+  if(v.tls?.enabled!==true||v.tls.reality?.enabled!==true||v.transport?.type&&v.transport.type!=='tcp')throw Error('PRIVATE_PROTOCOL_INVALID');
+  selected={type:'vless',server:v.server,port:v.server_port,uuid:v.uuid,network:'tcp',tls:true,flow:v.flow,servername:v.tls.server_name,'client-fingerprint':v.tls.utls?.fingerprint||'chrome','reality-opts':{'public-key':v.tls.reality.public_key,'short-id':v.tls.reality.short_id},udp:true};
+ }else throw Error('PRIVATE_FILE_INVALID');
+ for(const field of['interface-name','routing-mark','dialer-proxy','ip-version'])delete selected[field];
+ return strictPrivateNode({...selected,name:NAMES[slot]});
+}
+async function assertOwnStopped(dependencies={}) {
+ const core=require('./core-manager.cjs');
+ if(await (dependencies.isRunning||(()=>core.status(core.context(process.env,[])).running))())throw Error('OWN_CORE_RUNNING');
+ const file=path.join(runtimeRoot,'controller.json');if(!fs.existsSync(file))return;
+ try{
+  const metadata=JSON.parse(fs.readFileSync(file,'utf8'));const request=dependencies.readController||require('./native-bridge.cjs').request;
+  await request(metadata,'/configs',metadata.secret);throw Error('OWN_CORE_RUNNING');
+ }catch(error){
+  if(['ENOENT','ECONNREFUSED'].includes(error.code||error.message))return;
+  throw Error(error.message==='OWN_CORE_RUNNING'?'OWN_CORE_RUNNING':'OWN_CORE_STATE_UNKNOWN');
+ }
+}
+function privateIdentity(node) {return hash(JSON.stringify([String(node.server).toLowerCase(),node.port,String(node.uuid).toLowerCase(),node.network,node.flow,node['reality-opts']?.['public-key'],String(node['reality-opts']?.['short-id']||'').toLowerCase()]));}
+async function privateAdd(input,dependencies={}) {
+ if(!Object.hasOwn(NAMES,input.slot))throw Error('PRIVATE_SLOT_INVALID');
+ const binary=process.env.AX1OM_MIHOMO_BINARY;if(!binary||!path.isAbsolute(binary)||!fs.existsSync(binary))throw Error('PRIVATE_VALIDATOR_REQUIRED');
+ await assertOwnStopped(dependencies);
+ const node=input.type==='link'?parsePrivateLink(input.slot,input.url):input.type==='file'?parsePrivateFile(input.slot,input.path):null;
+ if(!node)throw Error('PRIVATE_TYPE_INVALID');validateCachedNodes([node]);
+ const s=loadStore();for(const [slot,existing]of Object.entries(s.privateNodes))if(slot!==input.slot&&privateIdentity(existing)===privateIdentity(node))throw Error('PRIVATE_ALREADY_OTHER_SLOT');
+ const existed=!!s.privateNodes[input.slot];const unchanged=existed&&privateIdentity(s.privateNodes[input.slot])===privateIdentity(node);
+ await assertOwnStopped(dependencies);
+ const indexBackup=path.join(root,'sources','index.previous.json');
+ const files=[storeFile(),indexBackup,...['config.yaml','config.previous.yaml','controller.json'].map(name=>path.join(runtimeRoot,name))];
+ const before=new Map(files.map(file=>[file,fs.existsSync(file)?fs.readFileSync(file):null]));
+ try{
+  if(!unchanged&&before.get(storeFile()))writeSecure(indexBackup,before.get(storeFile()));
+  if(!unchanged)delete s.privateCaps?.[input.slot];
+  s.privateNodes[input.slot]=node;saveStore(s);
+  const result=build(input);if(!result.success||!result.validated)throw Error('PRIVATE_BUILD_FAILED');
+  return {...result,privateSlot:input.slot,backupPath:fs.existsSync(indexBackup)?indexBackup:null,replaced:existed&&!unchanged,changed:!unchanged,message:unchanged?'专线已存在，配置校验通过。':'专线已导入，配置校验通过。'};
+ }catch{
+  for(const [file,data]of before)if(data===null){try{fs.unlinkSync(file);}catch{}}else writeSecure(file,data);
+  return {success:false,validated:false,message:'专线导入未通过，已恢复原配置。'};
+ }
+}
 function ownedConfig(s,input) {
  const {socketPath,secret}=input.controller||controllerForBuild();
  if(typeof socketPath!=='string'||!path.isAbsolute(socketPath)||socketPath.length>100||typeof secret!=='string'||secret.length<24||secret.length>256)throw Error('CONTROL_METADATA_INVALID');
@@ -143,7 +212,8 @@ function ownedConfig(s,input) {
 function controllerForBuild() {
  const file=path.join(runtimeRoot,'controller.json');
  if(fs.existsSync(file)){const c=JSON.parse(fs.readFileSync(file,'utf8'));if(typeof c.socketPath==='string'&&typeof c.secret==='string'&&c.secret.length>=24)return c;}
- const socketPath=path.join('/tmp',`ax1om-${process.getuid?.()||0}-${hash(root).slice(0,10)}.sock`);return {socketPath,secret:crypto.randomBytes(32).toString('hex')};
+ const core=require('./core-manager.cjs');const context=core.context(process.env,[]);
+ const socketPath=path.join(context.socketDir,'control.sock');return {socketPath,secret:crypto.randomBytes(32).toString('hex')};
 }
 function build(input={}) {
  const s=loadStore();const c=ownedConfig(s,input);const configPath=path.join(runtimeRoot,'config.yaml');
@@ -168,6 +238,15 @@ function build(input={}) {
   return {...redact(s),validated,configPath,tunEnabled:true,providerCount:s.sources.length,groupCount:c['proxy-groups'].length,ruleCount:c.rules.length};
  }finally{try{fs.unlinkSync(stagePath);}catch{}}
 }
-async function run(input={}) {switch(input.action||'list'){case'list':return redact(loadStore());case'import':return importLegacy(input);case'add':return addSource(input);case'build':return build(input);default:throw Error('ACTION_INVALID');}}
-module.exports={run,loadStore,saveStore,importLegacy,addSource,ownedConfig,safeNodes,parseSource,importDirect,convertPrivate,DEFAULT_DOMAINS};
-if(require.main===module){let data='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>{data+=d;if(data.length>8*1024*1024)process.exit(2);});process.stdin.on('end',async()=>{try{const result=await run(data.trim()?JSON.parse(data):{});process.stdout.write(JSON.stringify(result)+'\n');}catch{process.stdout.write(JSON.stringify({success:false,message:'订阅操作失败：输入、清单或来源不可用；原运行服务未更改。'})+'\n');}});}
+async function run(input={}) {switch(input.action||'list'){case'list':return redact(loadStore());case'import':return importLegacy(input);case'add':return addSource(input);case'private-add':return privateAdd(input);case'build':return build(input);default:throw Error('ACTION_INVALID');}}
+function safeOperationError(error) {
+ const code=error?.message;
+ if(code==='OWN_CORE_RUNNING')return '请先停止 AX1OM 独立核心，再导入专线。';
+ if(code==='OWN_CORE_STATE_UNKNOWN')return '独立核心状态未确认，未更改配置。';
+ if(code==='PRIVATE_VALIDATOR_REQUIRED')return '独立核心不可用于配置校验，未导入专线。';
+ if(code==='PRIVATE_ALREADY_OTHER_SLOT')return '该专线已存在于另一专线位置。';
+ if(typeof code==='string'&&code.startsWith('PRIVATE_'))return '专线格式无效：需要完整的 VLESS / REALITY / TCP / Vision 客户端。';
+ return '订阅操作失败：输入、清单或来源不可用；原运行服务未更改。';
+}
+module.exports={privateAdd,parsePrivateLink,parsePrivateFile,strictPrivateNode,assertOwnStopped,run,loadStore,saveStore,importLegacy,addSource,ownedConfig,safeNodes,parseSource,importDirect,convertPrivate,DEFAULT_DOMAINS};
+if(require.main===module){let data='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>{data+=d;if(data.length>8*1024*1024)process.exit(2);});process.stdin.on('end',async()=>{try{const result=await run(data.trim()?JSON.parse(data):{});process.stdout.write(JSON.stringify(result)+'\n');}catch(error){process.stdout.write(JSON.stringify({success:false,message:safeOperationError(error)})+'\n');}});}
