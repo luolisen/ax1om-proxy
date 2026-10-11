@@ -1,0 +1,17 @@
+# Local build outputs and downloaded runtime archives
+/.build/
+/dist/
+/vendor-runtime/
+/__pycache__/
+*.pyc
+.DS_Store
+# Private audits, telemetry and generated network configuration
+/audit/
+/audits/
+/outputs/
+/runtime/
+/candidates/
+*.private.log
+*.key
+*.pem
+.env

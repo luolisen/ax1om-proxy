@@ -1,0 +1,8 @@
+{
+  "name": "yaml",
+  "version": "2.9.0",
+  "license": "ISC",
+  "main": "./dist/index.js",
+  "type": "commonjs",
+  "repository": "https://github.com/eemeli/yaml"
+}
